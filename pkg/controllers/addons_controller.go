@@ -20,17 +20,21 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	kraanv1alpha1 "github.com/fidelity/kraan/pkg/api/v1alpha1"
 	"github.com/fidelity/kraan/pkg/internal/apply"
 	layers "github.com/fidelity/kraan/pkg/internal/layers"
 	utils "github.com/fidelity/kraan/pkg/internal/utils"
+
+	helmopv1 "github.com/fluxcd/helm-operator/pkg/apis/helm.fluxcd.io/v1"
+	"github.com/go-logr/logr"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // AddonsLayerReconciler reconciles a AddonsLayer object.
@@ -190,9 +194,25 @@ func (r *AddonsLayerReconciler) gitRepositorySource(o handler.MapObject) []ctrl.
 }
 */
 
+func indexHelmReleaseByOwner(o runtime.Object) []string {
+	hr, ok := o.(*helmopv1.HelmRelease)
+	if !ok {
+		return nil
+	}
+	owner := metav1.GetControllerOf(hr)
+	if owner == nil {
+		return nil
+	}
+	if owner.APIVersion != kraanv1alpha1.GroupVersion.String() || owner.Kind != "AddonsLayer" {
+		return nil
+	}
+	return []string{owner.Name}
+}
+
 // SetupWithManager is used to setup the controller
 func (r *AddonsLayerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	addonsLayer := &kraanv1alpha1.AddonsLayer{}
+	hr := &kraanv1alpha1.AddonsLayer{}
 	_, err := ctrl.NewControllerManagedBy(mgr).
 		For(addonsLayer).
 		/*		Watches(
@@ -201,6 +221,7 @@ func (r *AddonsLayerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					ToRequests: handler.ToRequestsFunc(r.gitRepositorySource),
 				},
 			).*/
+		Owns(hr).
 		Build(r)
 
 	if err != nil {
@@ -215,6 +236,10 @@ func (r *AddonsLayerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return fmt.Errorf("failed adding a watch for ready clusters: %w", err)
 		}
 	*/
+	if err := mgr.GetFieldIndexer().IndexField(&helmopv1.HelmRelease{}, ".owner", indexHelmReleaseByOwner); err != nil {
+		return fmt.Errorf("failed setting up FieldIndexer for HelmRelease owner: %w", err)
+	}
 
+	//return ctrl.NewControllerManagedBy(mgr).For(addonsLayer).Owns(hr).Complete(r)
 	return nil
 }
